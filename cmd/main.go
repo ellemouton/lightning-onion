@@ -85,6 +85,25 @@ func main() {
 					Usage: "The associated data to include",
 					Value: defaultAssocData,
 				},
+				cli.StringFlag{
+					Name: "blinding_point",
+					Usage: "The blinding point to use " +
+						"when parsing this onion.",
+				},
+			},
+		},
+		{
+			Name:   "nextblindedpub",
+			Action: nextBlindedPub,
+			Flags: []cli.Flag{
+				cli.StringFlag{
+					Name:     "priv",
+					Required: true,
+				},
+				cli.StringFlag{
+					Name:     "pub",
+					Required: true,
+				},
 			},
 		},
 	}
@@ -228,8 +247,20 @@ func parse(ctx *cli.Context) error {
 	if len(sessionKeyBytes) != 32 {
 		return fmt.Errorf("session key must be 32 bytes")
 	}
-
 	sessionKey, _ := btcec.PrivKeyFromBytes(sessionKeyBytes)
+
+	var blindingPoint *btcec.PublicKey
+	if bpStr := ctx.String("blinding_point"); bpStr != "" {
+		bpBytes, err := hex.DecodeString(bpStr)
+		if err != nil {
+			return err
+		}
+
+		blindingPoint, err = btcec.ParsePubKey(bpBytes)
+		if err != nil {
+			return err
+		}
+	}
 
 	onion, err := hex.DecodeString(ctx.String("onion"))
 	if err != nil {
@@ -250,7 +281,7 @@ func parse(ctx *cli.Context) error {
 	defer s.Stop()
 
 	p, err := s.ProcessOnionPacket(
-		&packet, []byte(ctx.String("assocData")), 10, nil,
+		&packet, []byte(ctx.String("assocData")), 10, blindingPoint,
 	)
 	if err != nil {
 		return err
@@ -263,5 +294,30 @@ func parse(ctx *cli.Context) error {
 		log.Fatalf("Error serializing message: %v", err)
 	}
 	fmt.Printf("%x\n", w.Bytes())
+	return nil
+}
+
+func nextBlindedPub(ctx *cli.Context) error {
+	privKeyByte, err := hex.DecodeString(ctx.String("priv"))
+	if err != nil {
+		return err
+	}
+	if len(privKeyByte) != 32 {
+		return fmt.Errorf("private key must be 32 bytes")
+	}
+	privKey, _ := btcec.PrivKeyFromBytes(privKeyByte)
+
+	pubKeyBytes, err := hex.DecodeString(ctx.String("pub"))
+	if err != nil {
+		return err
+	}
+
+	pubKey, err := btcec.ParsePubKey(pubKeyBytes)
+	if err != nil {
+		return err
+	}
+
+	nextBlindedKey := sphinx.NextEphemeral(privKey, pubKey)
+	fmt.Printf("%x\n", nextBlindedKey.SerializeCompressed())
 	return nil
 }
