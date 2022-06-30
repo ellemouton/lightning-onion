@@ -530,11 +530,14 @@ func (r *Router) Stop() {
 // In the case of a successful packet processing, and ProcessedPacket struct is
 // returned which houses the newly parsed packet, along with instructions on
 // what to do next.
-func (r *Router) ProcessOnionPacket(onionPkt *OnionPacket,
-	assocData []byte, incomingCltv uint32) (*ProcessedPacket, error) {
+func (r *Router) ProcessOnionPacket(onionPkt *OnionPacket, assocData []byte,
+	incomingCltv uint32, blindingPoint *btcec.PublicKey) (*ProcessedPacket,
+	error) {
 
 	// Compute the shared secret for this onion packet.
-	sharedSecret, err := r.generateSharedSecret(onionPkt.EphemeralKey)
+	sharedSecret, err := r.generateSharedSecret(
+		onionPkt.EphemeralKey, blindingPoint,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -546,7 +549,7 @@ func (r *Router) ProcessOnionPacket(onionPkt *OnionPacket,
 	// Continue to optimistically process this packet, deferring replay
 	// protection until the end to reduce the penalty of multiple IO
 	// operations.
-	packet, err := processOnionPacket(onionPkt, &sharedSecret, assocData, r)
+	packet, err := processOnionPacket(onionPkt, &sharedSecret, assocData)
 	if err != nil {
 		return nil, err
 	}
@@ -564,16 +567,18 @@ func (r *Router) ProcessOnionPacket(onionPkt *OnionPacket,
 //
 // NOTE: This method does not do any sort of replay protection, and should only
 // be used to reconstruct packets that were successfully processed previously.
-func (r *Router) ReconstructOnionPacket(onionPkt *OnionPacket,
-	assocData []byte) (*ProcessedPacket, error) {
+func (r *Router) ReconstructOnionPacket(onionPkt *OnionPacket, assocData []byte,
+	blindingPoint *btcec.PublicKey) (*ProcessedPacket, error) {
 
 	// Compute the shared secret for this onion packet.
-	sharedSecret, err := r.generateSharedSecret(onionPkt.EphemeralKey)
+	sharedSecret, err := r.generateSharedSecret(
+		onionPkt.EphemeralKey, blindingPoint,
+	)
 	if err != nil {
 		return nil, err
 	}
 
-	return processOnionPacket(onionPkt, &sharedSecret, assocData, r)
+	return processOnionPacket(onionPkt, &sharedSecret, assocData)
 }
 
 // unwrapPacket wraps a layer of the passed onion packet using the specified
@@ -640,8 +645,7 @@ func unwrapPacket(onionPkt *OnionPacket, sharedSecret *Hash256,
 // packets. The processed packets returned from this method should only be used
 // if the packet was not flagged as a replayed packet.
 func processOnionPacket(onionPkt *OnionPacket, sharedSecret *Hash256,
-	assocData []byte,
-	sharedSecretGen sharedSecretGenerator) (*ProcessedPacket, error) {
+	assocData []byte) (*ProcessedPacket, error) {
 
 	// First, we'll unwrap an initial layer of the onion packet. Typically,
 	// we'll only have a single layer to unwrap, However, if the sender has
@@ -728,11 +732,12 @@ func (r *Router) BeginTxn(id []byte, nels int) *Tx {
 // returned which houses the newly parsed packet, along with instructions on
 // what to do next.
 func (t *Tx) ProcessOnionPacket(seqNum uint16, onionPkt *OnionPacket,
-	assocData []byte, incomingCltv uint32) error {
+	assocData []byte, incomingCltv uint32,
+	blindingPoint *btcec.PublicKey) error {
 
 	// Compute the shared secret for this onion packet.
 	sharedSecret, err := t.router.generateSharedSecret(
-		onionPkt.EphemeralKey,
+		onionPkt.EphemeralKey, blindingPoint,
 	)
 	if err != nil {
 		return err
@@ -745,9 +750,7 @@ func (t *Tx) ProcessOnionPacket(seqNum uint16, onionPkt *OnionPacket,
 	// Continue to optimistically process this packet, deferring replay
 	// protection until the end to reduce the penalty of multiple IO
 	// operations.
-	packet, err := processOnionPacket(
-		onionPkt, &sharedSecret, assocData, t.router,
-	)
+	packet, err := processOnionPacket(onionPkt, &sharedSecret, assocData)
 	if err != nil {
 		return err
 	}

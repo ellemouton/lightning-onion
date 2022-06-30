@@ -18,7 +18,7 @@ type OnionErrorEncrypter struct {
 func NewOnionErrorEncrypter(router *Router,
 	ephemeralKey *btcec.PublicKey) (*OnionErrorEncrypter, error) {
 
-	sharedSecret, err := router.generateSharedSecret(ephemeralKey)
+	sharedSecret, err := router.generateSharedSecret(ephemeralKey, nil)
 	if err != nil {
 		return nil, err
 	}

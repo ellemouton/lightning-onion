@@ -77,7 +77,7 @@ func BenchmarkProcessPacket(b *testing.B) {
 		pkt *ProcessedPacket
 	)
 	for i := 0; i < b.N; i++ {
-		pkt, err = path[0].ProcessOnionPacket(sphinxPacket, nil, uint32(i))
+		pkt, err = path[0].ProcessOnionPacket(sphinxPacket, nil, uint32(i), nil)
 		if err != nil {
 			b.Fatalf("unable to process packet %d: %v", i, err)
 		}

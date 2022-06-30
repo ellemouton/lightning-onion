@@ -8,10 +8,14 @@ import (
 	"testing"
 
 	"github.com/btcsuite/btcd/btcec/v2"
+	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/stretchr/testify/require"
 )
 
-const routeBlindingTestFileName = "testdata/route-blinding-test.json"
+const (
+	routeBlindingTestFileName      = "testdata/route-blinding-test.json"
+	onionRouteBlindingTestFileName = "testdata/onion-route-blinding-test.json"
+)
 
 // TestBuildBlindedRoute tests BuildBlindedRoute and DecryptBlindedData against
 // the spec test vectors.
@@ -108,6 +112,136 @@ func TestBlindBlindedRoute(t *testing.T) {
 			hop.NextEphemeralPubKey, NextEphemeral(priv, ephem),
 		))
 	}
+}
+
+// TestOnionRouteBlinding tests that an onion packet can correctly be processed
+// by a node in a blinded route.
+func TestOnionRouteBlinding(t *testing.T) {
+	t.Parallel()
+
+	// First, we'll read out the raw Json file at the target location.
+	jsonBytes, err := ioutil.ReadFile(onionRouteBlindingTestFileName)
+	require.NoError(t, err)
+
+	// Once we have the raw file, we'll unpack it into our
+	// blindingJsonTestCase struct defined above.
+	testCase := &onionBlindingJsonTestCase{}
+	require.NoError(t, json.Unmarshal(jsonBytes, testCase))
+
+	assoc, err := hex.DecodeString(testCase.Generate.AssocData)
+	require.NoError(t, err)
+
+	// Extract the original onion packet to be processed.
+	onion, err := hex.DecodeString(testCase.Generate.Onion)
+	require.NoError(t, err)
+
+	onionBytes := bytes.NewReader(onion)
+	onionPacket := &OnionPacket{}
+	require.NoError(t, onionPacket.Decode(onionBytes))
+
+	// peelOnion is a helper closure that can be used to set up a Router
+	// and use it to process the given onion packet.
+	peelOnion := func(key *btcec.PrivateKey, onionPkt *OnionPacket,
+		blindingPoint *btcec.PublicKey) *ProcessedPacket {
+
+		r := NewRouter(
+			&PrivKeyECDH{PrivKey: key}, &chaincfg.MainNetParams,
+			NewMemoryReplayLog(),
+		)
+
+		r.Start()
+		defer r.Stop()
+
+		res, err := r.ProcessOnionPacket(
+			onionPacket, assoc, 10, blindingPoint,
+		)
+		require.NoError(t, err)
+		return res
+	}
+
+	hops := testCase.Decrypt.Hops
+	require.Len(t, hops, 5)
+
+	// There are some things that the processor of the onion packet will
+	// only be able to determine from the actual contents of the encrypted
+	// data it receives. These things include the next_blinding_point for
+	// the introduction point and the next_blinding_override. The decryption
+	// of this data is dependent on the encoding chosen by higher layers.
+	// The test uses TLVs. Since the extraction of this data is dependent
+	// on layers outside the scope of this library, we provide handle these
+	// cases manually for the sake of the test.
+	var (
+		introPointIndex = 2
+		firstBlinding   = pubKeyFromString(hops[1].NextBlinding)
+
+		concatIndex      = 3
+		blindingOverride = pubKeyFromString(hops[2].NextBlinding)
+	)
+
+	var blindingPoint *btcec.PublicKey
+	for i, hop := range testCase.Decrypt.Hops {
+		buff := bytes.NewBuffer(nil)
+		require.NoError(t, onionPacket.Encode(buff))
+		require.Equal(t, hop.Onion, hex.EncodeToString(buff.Bytes()))
+
+		priv := privKeyFromString(hop.NodePrivKey)
+
+		if i == introPointIndex {
+			blindingPoint = firstBlinding
+		} else if i == concatIndex {
+			blindingPoint = blindingOverride
+		}
+
+		processedPkt := peelOnion(priv, onionPacket, blindingPoint)
+
+		if blindingPoint != nil {
+			blindingPoint = NextEphemeral(priv, blindingPoint)
+		}
+		onionPacket = processedPkt.NextPacket
+	}
+}
+
+type onionBlindingJsonTestCase struct {
+	Comment  string            `json:"comment"`
+	Generate generateOnionData `json:"generate"`
+	Decrypt  decryptData       `json:"decrypt"`
+}
+
+type generateOnionData struct {
+	Comment      string       `json:"comment"`
+	SessionKey   string       `json:"session_key"`
+	AssocData    string       `json:"associated_data"`
+	BlindedRoute blindedRoute `json:"blinded_route"`
+	FullRoute    fullRoute    `json:"full_route"`
+	Onion        string       `json:"onion"`
+}
+
+type blindedRoute struct {
+	Comment            string       `json:"comment"`
+	IntroductionNodeID string       `json:"introduction_node_id"`
+	Blinding           string       `json:"blinding"`
+	Hops               []blindedHop `json:"hops"`
+}
+
+type fullRoute struct {
+	Comment string             `json:"comment"`
+	Hops    []fullRouteHopData `json:"hops"`
+}
+
+type fullRouteHopData struct {
+	PubKey  string `json:"pubkey"`
+	Payload string `json:"payload"`
+}
+
+type decryptData struct {
+	Comment string        `json:"comment"`
+	Hops    []decryptHops `json:"hops"`
+}
+
+type decryptHops struct {
+	Onion        string `json:"onion"`
+	NodePrivKey  string `json:"node_privkey"`
+	NextBlinding string `json:"next_blinding""`
 }
 
 type blindingJsonTestCase struct {
